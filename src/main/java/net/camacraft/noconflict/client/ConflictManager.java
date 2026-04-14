@@ -2,6 +2,7 @@ package net.camacraft.noconflict.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import net.camacraft.noconflict.Config;
+import net.camacraft.noconflict.KeyHandler;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 
@@ -13,7 +14,7 @@ import java.util.Map;
 public class ConflictManager {
     private static final Map<InputConstants.Key, List<KeyMapping>> conflicts = new HashMap<>();
     
-    // Mappings that share a key with an ignored mapping (e.g. Movement) are suppressed to prevent vanilla double-triggering
+    // Mappings that share a key with an ignored mapping AND conflict contextually are suppressed to prevent vanilla double-triggering
     private static final Map<InputConstants.Key, List<KeyMapping>> suppressedConflicts = new HashMap<>();
     
     // Maps physical key to the mapping selected for TAP behavior
@@ -41,35 +42,66 @@ public class ConflictManager {
         
         conflicts.clear();
         suppressedConflicts.clear();
-        originalKeys.clear();
+        // We DO NOT clear originalKeys here. This makes initialize() safe to call multiple times,
+        // even if the keys are currently set to UNKNOWN from a previous initialization pass.
         
+        List<? extends String> abandonedKeys = Config.ABANDONED_KEYS.get();
         List<? extends String> ignoredCategories = Config.IGNORED_CATEGORIES.get();
         List<? extends String> ignoredKeybinds = Config.IGNORED_KEYBINDS.get();
 
-        Map<InputConstants.Key, Boolean> hasIgnored = new HashMap<>();
-        Map<InputConstants.Key, List<KeyMapping>> tempConflicts = new HashMap<>();
+        Map<InputConstants.Key, List<KeyMapping>> allMappingsOnKey = new HashMap<>();
 
         for (KeyMapping mapping : mc.options.keyMappings) {
             InputConstants.Key key = mapping.getKey();
-            originalKeys.put(mapping, key);
             
+            // Capture the true physical key if it's currently bound
             if (key != InputConstants.UNKNOWN) {
-                if (ignoredCategories.contains(mapping.getCategory()) || ignoredKeybinds.contains(mapping.getName())) {
-                    hasIgnored.put(key, true);
-                } else {
-                    tempConflicts.computeIfAbsent(key, k -> new ArrayList<>()).add(mapping);
+                originalKeys.put(mapping, key);
+            } else {
+                // If it's UNKNOWN, fallback to the physical key we recorded previously (if any)
+                key = originalKeys.get(mapping);
+            }
+            
+            if (key != null && key != InputConstants.UNKNOWN) {
+                if (abandonedKeys.contains(key.getName())) {
+                    continue; // Completely abandon this physical key
                 }
+                allMappingsOnKey.computeIfAbsent(key, k -> new ArrayList<>()).add(mapping);
             }
         }
         
-        for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : tempConflicts.entrySet()) {
+        for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : allMappingsOnKey.entrySet()) {
             InputConstants.Key key = entry.getKey();
-            if (hasIgnored.getOrDefault(key, false)) {
-                // If the key has an ignored mapping (like Movement), suppress all other conflicting mappings!
-                // This prevents vanilla from triggering both actions simultaneously.
-                suppressedConflicts.put(key, entry.getValue());
-            } else if (entry.getValue().size() > 1) {
-                conflicts.put(key, entry.getValue());
+            List<KeyMapping> mappings = entry.getValue();
+            
+            for (KeyMapping mapping : mappings) {
+                boolean hasConflict = false;
+                boolean isSuppressedByIgnored = false;
+                
+                boolean isThisIgnored = ignoredCategories.contains(mapping.getCategory()) || ignoredKeybinds.contains(mapping.getName());
+                
+                if (isThisIgnored) {
+                    continue; // We don't add ignored mappings to conflicts or suppressedConflicts
+                }
+                
+                for (KeyMapping other : mappings) {
+                    if (mapping == other) continue;
+                    
+                    if (doMappingsConflict(mapping, other)) {
+                        hasConflict = true;
+                        boolean isOtherIgnored = ignoredCategories.contains(other.getCategory()) || ignoredKeybinds.contains(other.getName());
+                        if (isOtherIgnored) {
+                            isSuppressedByIgnored = true;
+                            break; // Suppressed by an ignored mapping, no need to check further
+                        }
+                    }
+                }
+                
+                if (isSuppressedByIgnored) {
+                    suppressedConflicts.computeIfAbsent(key, k -> new ArrayList<>()).add(mapping);
+                } else if (hasConflict) {
+                    conflicts.computeIfAbsent(key, k -> new ArrayList<>()).add(mapping);
+                }
             }
         }
         
@@ -83,6 +115,12 @@ public class ConflictManager {
         validateSelections(holdSelections);
 
         applyResolutions();
+    }
+    
+    private static boolean doMappingsConflict(KeyMapping a, KeyMapping b) {
+        net.minecraftforge.client.settings.IKeyConflictContext ctxA = a.getKeyConflictContext();
+        net.minecraftforge.client.settings.IKeyConflictContext ctxB = b.getKeyConflictContext();
+        return ctxA.conflicts(ctxB) || ctxB.conflicts(ctxA);
     }
     
     private static void applyDefaultSelections() {
@@ -141,6 +179,23 @@ public class ConflictManager {
     public static List<KeyMapping> getConflictingMappings(InputConstants.Key key) {
         return conflicts.getOrDefault(key, new ArrayList<>());
     }
+    
+    public static List<KeyMapping> getActiveMappings(InputConstants.Key key) {
+        List<KeyMapping> active = new ArrayList<>();
+        List<KeyMapping> mappings = conflicts.get(key);
+        if (mappings != null) {
+            for (KeyMapping mapping : mappings) {
+                try {
+                    if (mapping.getKeyConflictContext().isActive()) {
+                        active.add(mapping);
+                    }
+                } catch (Exception e) {
+                    // Ignore badly coded contexts that crash on title screen or when mc.level is null
+                }
+            }
+        }
+        return active;
+    }
 
     public static KeyMapping getSelection(InputConstants.Key key) {
         return selections.get(key);
@@ -175,6 +230,7 @@ public class ConflictManager {
         for (Map.Entry<KeyMapping, InputConstants.Key> entry : originalKeys.entrySet()) {
             entry.getKey().setKey(entry.getValue());
         }
+        KeyMapping.resetMapping();
     }
 
     public static void resume() {
@@ -194,6 +250,7 @@ public class ConflictManager {
             for (Map.Entry<KeyMapping, InputConstants.Key> entry : originalKeys.entrySet()) {
                 entry.getKey().setKey(entry.getValue());
             }
+            KeyMapping.resetMapping();
         }
     }
     
@@ -208,14 +265,77 @@ public class ConflictManager {
         if (suspended || saving) return;
         
         for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : conflicts.entrySet()) {
-            for (KeyMapping mapping : entry.getValue()) {
-                mapping.setKey(InputConstants.UNKNOWN);
+            InputConstants.Key key = entry.getKey();
+            KeyMapping selection = selections.get(key);
+            KeyMapping holdSelection = holdSelections.get(key);
+            
+            // If nothing is selected for this key and the config dictates TRIGGER_ALL, 
+            // rebind them to their true physical keys so vanilla handles them natively.
+            if (selection == null && holdSelection == null && Config.DEFAULT_TAP_BEHAVIOR.get() == Config.DefaultHoldBehavior.TRIGGER_ALL) {
+                for (KeyMapping mapping : entry.getValue()) {
+                    mapping.setKey(key);
+                }
+            } else {
+                for (KeyMapping mapping : entry.getValue()) {
+                    mapping.setKey(InputConstants.UNKNOWN);
+                }
             }
         }
+
         for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : suppressedConflicts.entrySet()) {
             for (KeyMapping mapping : entry.getValue()) {
                 mapping.setKey(InputConstants.UNKNOWN);
             }
+        }
+        
+        // We MUST rebuild the static KeyMapping MAP so vanilla's key processor stops routing
+        // physical key presses to these conflicted keybinds!
+        KeyMapping.resetMapping();
+    }
+    
+    public static void enforceResolutions() {
+        if (suspended || saving) return;
+        boolean needsReset = false;
+        
+        for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : conflicts.entrySet()) {
+            InputConstants.Key key = entry.getKey();
+            
+            // Skip enforcing if KeyHandler is temporarily binding this key for a native GUI action
+            if (KeyHandler.isPressedInGui(key)) {
+                continue;
+            }
+            
+            KeyMapping selection = selections.get(key);
+            KeyMapping holdSelection = holdSelections.get(key);
+            
+            if (selection == null && holdSelection == null && Config.DEFAULT_TAP_BEHAVIOR.get() == Config.DefaultHoldBehavior.TRIGGER_ALL) {
+                for (KeyMapping mapping : entry.getValue()) {
+                    if (mapping.getKey() != key) {
+                        mapping.setKey(key);
+                        needsReset = true;
+                    }
+                }
+            } else {
+                for (KeyMapping mapping : entry.getValue()) {
+                    if (mapping.getKey() != InputConstants.UNKNOWN) {
+                        mapping.setKey(InputConstants.UNKNOWN);
+                        needsReset = true;
+                    }
+                }
+            }
+        }
+
+        for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : suppressedConflicts.entrySet()) {
+            for (KeyMapping mapping : entry.getValue()) {
+                if (mapping.getKey() != InputConstants.UNKNOWN) {
+                    mapping.setKey(InputConstants.UNKNOWN);
+                    needsReset = true;
+                }
+            }
+        }
+        
+        if (needsReset) {
+            KeyMapping.resetMapping();
         }
     }
 }

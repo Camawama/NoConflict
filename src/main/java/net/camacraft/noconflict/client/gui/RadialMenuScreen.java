@@ -19,7 +19,8 @@ import java.util.List;
 import java.util.ArrayList;
 
 public class RadialMenuScreen extends Screen {
-    private final List<KeyMapping> keyMappings;
+    private final List<KeyMapping> allKeyMappings;
+    private List<KeyMapping> currentPageMappings;
     private final InputConstants.Key triggerKey;
     private final Screen parentScreen;
     private final boolean saveSelection;
@@ -28,17 +29,47 @@ public class RadialMenuScreen extends Screen {
     private boolean hasClickedDuringThisOpen = false;
     private int indexClickedDuringThisOpen = -1;
     
+    private int currentPage = 0;
+    private int totalPages = 1;
+    private final boolean paginationEnabled;
+    private final int itemsPerPage;
+    
     private long lastRenderTime;
-    private final float[] hoverProgress;
+    private float[] hoverProgress;
 
     public RadialMenuScreen(List<KeyMapping> keyMappings, InputConstants.Key triggerKey, Screen parentScreen, boolean saveSelection) {
         super(Component.literal("Radial Menu"));
-        this.keyMappings = new ArrayList<>(keyMappings);
+        this.allKeyMappings = new ArrayList<>(keyMappings);
         this.triggerKey = triggerKey;
         this.parentScreen = parentScreen;
         this.saveSelection = saveSelection;
-        this.hoverProgress = new float[keyMappings.size()];
+        
+        this.paginationEnabled = Config.PAGINATION_ENABLED.get();
+        this.itemsPerPage = Config.ITEMS_PER_PAGE.get();
+        
+        updatePageMappings();
         this.lastRenderTime = Util.getMillis();
+    }
+    
+    private void updatePageMappings() {
+        if (paginationEnabled && allKeyMappings.size() > itemsPerPage) {
+            this.totalPages = (int) Math.ceil((double) allKeyMappings.size() / itemsPerPage);
+            if (currentPage >= totalPages) currentPage = totalPages - 1;
+            if (currentPage < 0) currentPage = 0;
+            
+            int startIndex = currentPage * itemsPerPage;
+            int endIndex = Math.min(startIndex + itemsPerPage, allKeyMappings.size());
+            this.currentPageMappings = allKeyMappings.subList(startIndex, endIndex);
+        } else {
+            this.currentPageMappings = allKeyMappings;
+            this.totalPages = 1;
+            this.currentPage = 0;
+        }
+        
+        this.hoverProgress = new float[currentPageMappings.size()];
+        this.selectedIndex = -1;
+        this.indexClickedDuringThisOpen = -1;
+        this.hasClickedDuringThisOpen = false;
     }
 
     private void playToggleSound() {
@@ -84,7 +115,7 @@ public class RadialMenuScreen extends Screen {
         
         super.render(guiGraphics, mouseX, mouseY, partialTicks);
 
-        if (keyMappings.isEmpty()) return;
+        if (currentPageMappings.isEmpty()) return;
 
         int centerX = this.width / 2;
         int centerY = this.height / 2;
@@ -102,10 +133,10 @@ public class RadialMenuScreen extends Screen {
             hoveringCenter = false;
             double angle = Math.atan2(dy, dx);
             if (angle < 0) angle += 2 * Math.PI;
-            double segmentAngle = 2 * Math.PI / keyMappings.size();
+            double segmentAngle = 2 * Math.PI / currentPageMappings.size();
             double adjustedAngle = (angle + segmentAngle / 2) % (2 * Math.PI);
             selectedIndex = (int) (adjustedAngle / segmentAngle);
-            if (selectedIndex >= keyMappings.size()) selectedIndex = 0;
+            if (selectedIndex >= currentPageMappings.size()) selectedIndex = 0;
         } else {
             hoveringCenter = true;
             selectedIndex = -1;
@@ -117,7 +148,7 @@ public class RadialMenuScreen extends Screen {
         lastRenderTime = currentTime;
 
         float animationSpeed = Config.ANIMATION_SPEED.get().floatValue();
-        for (int i = 0; i < keyMappings.size(); i++) {
+        for (int i = 0; i < currentPageMappings.size(); i++) {
             if (i == selectedIndex) {
                 hoverProgress[i] = Math.min(1.0f, hoverProgress[i] + deltaTime * animationSpeed);
             } else {
@@ -126,17 +157,19 @@ public class RadialMenuScreen extends Screen {
         }
 
         // Draw separators
-        int innerRadius = 30; // Leave space for center X
-        int outerRadius = radius + 60;
-        int separatorColor = Config.getIntColor(Config.SEPARATOR_COLOR);
-        for (int i = 0; i < keyMappings.size(); i++) {
-            double angle = 2 * Math.PI * i / keyMappings.size() - Math.PI / keyMappings.size();
-            
-            guiGraphics.pose().pushPose();
-            guiGraphics.pose().translate(centerX, centerY, 0);
-            guiGraphics.pose().mulPose(Axis.ZP.rotation((float) angle));
-            guiGraphics.fill(innerRadius, -1, outerRadius, 1, separatorColor);
-            guiGraphics.pose().popPose();
+        if (currentPageMappings.size() > 1) {
+            int innerRadius = 30; // Leave space for center X
+            int outerRadius = radius + 60;
+            int separatorColor = Config.getIntColor(Config.SEPARATOR_COLOR);
+            for (int i = 0; i < currentPageMappings.size(); i++) {
+                double angle = 2 * Math.PI * i / currentPageMappings.size() - Math.PI / currentPageMappings.size();
+                
+                guiGraphics.pose().pushPose();
+                guiGraphics.pose().translate(centerX, centerY, 0);
+                guiGraphics.pose().mulPose(Axis.ZP.rotation((float) angle));
+                guiGraphics.fill(innerRadius, -1, outerRadius, 1, separatorColor);
+                guiGraphics.pose().popPose();
+            }
         }
 
         // Draw the center X
@@ -148,9 +181,22 @@ public class RadialMenuScreen extends Screen {
         int xColor = hoveringCenter ? 0xFFFF5555 : 0xFFB22222;
         guiGraphics.drawString(this.font, xText, -this.font.width(xText) / 2, -this.font.lineHeight / 2, xColor);
         guiGraphics.pose().popPose();
+        
+        // Draw page indicator if pagination is active
+        if (totalPages > 1) {
+            String pageText = (currentPage + 1) + " / " + totalPages;
+            int pageTextWidth = this.font.width(pageText);
+            // Position directly under the center X
+            int yOffset = (int) ((this.font.lineHeight / 2.0f) * textScale * 1.5f + 5);
+            guiGraphics.pose().pushPose();
+            guiGraphics.pose().translate(centerX, centerY + yOffset, 0);
+            guiGraphics.pose().scale((float)textScale * 0.8f, (float)textScale * 0.8f, 1.0f);
+            guiGraphics.drawString(this.font, pageText, -pageTextWidth / 2, 0, 0xFFAAAAAA);
+            guiGraphics.pose().popPose();
+        }
 
-        for (int i = 0; i < keyMappings.size(); i++) {
-            double angle = 2 * Math.PI * i / keyMappings.size();
+        for (int i = 0; i < currentPageMappings.size(); i++) {
+            double angle = 2 * Math.PI * i / currentPageMappings.size();
             double itemX = centerX + radius * Math.cos(angle);
             double itemY = centerY + radius * Math.sin(angle);
 
@@ -162,7 +208,7 @@ public class RadialMenuScreen extends Screen {
             guiGraphics.pose().translate(itemX, itemY, 0);
             guiGraphics.pose().scale(finalScale, finalScale, finalScale);
 
-            KeyMapping mapping = keyMappings.get(i);
+            KeyMapping mapping = currentPageMappings.get(i);
             String translatedName = Component.translatable(mapping.getName()).getString();
             String[] words = translatedName.split(" ");
             
@@ -216,7 +262,7 @@ public class RadialMenuScreen extends Screen {
                 closeRadialMenu();
             }
         } else if (selectedIndex != -1) {
-            KeyMapping selectedMapping = keyMappings.get(selectedIndex);
+            KeyMapping selectedMapping = currentPageMappings.get(selectedIndex);
             KeyMapping currentSelection = saveSelection ? ConflictManager.getSelection(triggerKey) : null;
             KeyMapping holdSelection = saveSelection ? ConflictManager.getHoldSelection(triggerKey) : null;
             
@@ -227,11 +273,15 @@ public class RadialMenuScreen extends Screen {
                 }
                 
                 if (isClick && button == 1) { // Right Click
-                    KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                    if (Config.TRIGGER_ON_SELECTION.get()) {
+                        KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                    }
                     playToggleSound();
                     closeRadialMenu();
                 } else if (!isClick) { // Release
-                    KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                    if (Config.TRIGGER_ON_SELECTION.get()) {
+                        KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                    }
                     playToggleSound();
                     closeRadialMenu();
                 }
@@ -254,7 +304,9 @@ public class RadialMenuScreen extends Screen {
                     if (selectedMapping != currentSelection) {
                         ConflictManager.setSelection(triggerKey, selectedMapping);
                     }
-                    KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                    if (Config.TRIGGER_ON_SELECTION.get()) {
+                        KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                    }
                     playToggleSound();
                     closeRadialMenu();
                 }
@@ -263,23 +315,23 @@ public class RadialMenuScreen extends Screen {
                 if (hasClickedDuringThisOpen && selectedIndex == indexClickedDuringThisOpen) {
                     if (selectedMapping != currentSelection) {
                         ConflictManager.setSelection(triggerKey, selectedMapping);
-                        KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                        if (Config.TRIGGER_ON_SELECTION.get()) KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
                     } else {
-                        KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                        if (Config.TRIGGER_ON_SELECTION.get()) KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
                     }
                 } else if (hasClickedDuringThisOpen && selectedIndex != indexClickedDuringThisOpen) {
                     if (selectedMapping == currentSelection) {
                         ConflictManager.setSelection(triggerKey, null);
                     } else {
                         ConflictManager.setSelection(triggerKey, selectedMapping);
-                        KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                        if (Config.TRIGGER_ON_SELECTION.get()) KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
                     }
                 } else {
                     if (selectedMapping == currentSelection) {
                         ConflictManager.setSelection(triggerKey, null);
                     } else {
                         ConflictManager.setSelection(triggerKey, selectedMapping);
-                        KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
+                        if (Config.TRIGGER_ON_SELECTION.get()) KeyHandler.setPendingTapAction(triggerKey, selectedMapping);
                     }
                 }
                 playToggleSound();
@@ -295,6 +347,22 @@ public class RadialMenuScreen extends Screen {
     
     private void closeRadialMenu() {
         Minecraft.getInstance().setScreen(this.parentScreen);
+    }
+    
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (totalPages > 1) {
+            if (delta > 0) {
+                currentPage--;
+                if (currentPage < 0) currentPage = totalPages - 1; // loop around
+            } else if (delta < 0) {
+                currentPage++;
+                if (currentPage >= totalPages) currentPage = 0; // loop around
+            }
+            updatePageMappings();
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

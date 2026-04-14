@@ -31,6 +31,7 @@ public class KeyHandler {
 
     private static final Map<InputConstants.Key, Long> keyPressTimes = new HashMap<>();
     private static final Map<InputConstants.Key, Boolean> heldForMenu = new HashMap<>();
+    private static final Map<InputConstants.Key, Boolean> pressedInGui = new HashMap<>();
     
     // To track double taps
     private static final Map<InputConstants.Key, Long> lastReleaseTimes = new HashMap<>();
@@ -42,12 +43,23 @@ public class KeyHandler {
     // Prevents the mod from intercepting its own simulated F3 key presses
     private static boolean isSimulatingF3 = false;
     
+    // Ensures ConflictManager applies resolutions on the very first game tick after all mods load
+    private static boolean initialized = false;
+    
     // Cached reflection method for vanilla's internal F3 action handler
     private static Method handleDebugKeysMethod = null;
 
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase == TickEvent.Phase.START) {
+            if (!initialized) {
+                initialized = true;
+                ConflictManager.initialize();
+            }
+            
+            // Continuously enforce resolutions in case vanilla or other mods overwrite the key map behind our back
+            ConflictManager.enforceResolutions();
+
             Minecraft mc = Minecraft.getInstance();
 
             // Check if we need to trigger a pending tap action from a closed menu
@@ -61,17 +73,11 @@ public class KeyHandler {
                             mc.options.renderDebug = true;
                             mc.options.renderFpsChart = true;
                         } else {
-                            // Modern Minecraft checks the physical state of the F3 key via GLFW directly
-                            // when another key is pressed. Since we can't spoof native GLFW hardware states, 
-                            // simulating a key press won't work because the game knows F3 is physically released.
-                            // Instead, we use reflection to find and directly invoke vanilla's internal handleDebugKeys method.
                             mc.tell(() -> {
                                 try {
                                     if (handleDebugKeysMethod == null) {
                                         for (Method m : mc.keyboardHandler.getClass().getDeclaredMethods()) {
                                             String name = m.getName();
-                                            // Find the exact handleDebugKeys method.
-                                            // m_90933_ is the SRG name for handleDebugKeys in production environments.
                                             if ((name.equals("handleDebugKeys") || name.equals("m_90933_")) 
                                                 && m.getReturnType() == boolean.class 
                                                 && m.getParameterCount() == 1 
@@ -84,10 +90,13 @@ public class KeyHandler {
                                         }
                                     }
                                     
-                                    if (handleDebugKeysMethod != null) {
+                                    if (targetKey == GLFW.GLFW_KEY_F4 && mc.gameMode != null && mc.player != null) {
+                                        // Bypass reflection for F4 because the vanilla screen instantly closes without applying 
+                                        // if the physical F3 key is not actively held down. We manually toggle it instead.
+                                        mc.player.connection.sendCommand("gamemode " + (mc.player.isCreative() ? "survival" : "creative"));
+                                    } else if (handleDebugKeysMethod != null) {
                                         handleDebugKeysMethod.invoke(mc.keyboardHandler, targetKey);
                                     } else {
-                                        // Absolute fallback for major actions if reflection completely fails across versions
                                         if (targetKey == GLFW.GLFW_KEY_T) mc.reloadResourcePacks();
                                         if (targetKey == GLFW.GLFW_KEY_A) mc.levelRenderer.allChanged();
                                         if (targetKey == GLFW.GLFW_KEY_D) mc.gui.getChat().clearMessages(false);
@@ -102,21 +111,25 @@ public class KeyHandler {
                         
                         Screen activeScreen = mc.screen;
                         if (activeScreen != null) {
-                            activeScreen.keyPressed(pendingTapKey.getValue(), 0, 0);
-                            if (mc.screen == activeScreen) {
-                                activeScreen.keyReleased(pendingTapKey.getValue(), 0, 0);
-                            } else {
-                                while(pendingTapSelection.consumeClick()) {}
-                            }
+                            mc.tell(() -> {
+                                if (mc.screen != null) {
+                                    mc.screen.keyPressed(pendingTapKey.getValue(), 0, 0);
+                                    if (mc.screen != null) {
+                                        mc.screen.keyReleased(pendingTapKey.getValue(), 0, 0);
+                                    } else {
+                                        while (pendingTapSelection.consumeClick()) {}
+                                    }
+                                }
+                                MinecraftForge.EVENT_BUS.post(new InputEvent.Key(pendingTapKey.getValue(), 0, 0, 0));
+                                pendingTapSelection.setKey(InputConstants.UNKNOWN);
+                            });
                         } else {
                             ((KeyMappingExtensions) pendingTapSelection).incrementClickCounter();
                             pendingTapSelection.setDown(true);
+                            MinecraftForge.EVENT_BUS.post(new InputEvent.Key(pendingTapKey.getValue(), 0, 0, 0));
+                            pendingTapSelection.setDown(false);
+                            pendingTapSelection.setKey(InputConstants.UNKNOWN);
                         }
-                        
-                        pendingTapSelection.setDown(false);
-                        pendingTapSelection.setKey(InputConstants.UNKNOWN);
-                        
-                        MinecraftForge.EVENT_BUS.post(new InputEvent.Key(InputConstants.UNKNOWN.getValue(), 0, 0, 0));
                     }
                     
                     pendingTapKey = null;
@@ -127,6 +140,7 @@ public class KeyHandler {
             if (mc.screen instanceof RadialMenuScreen) {
                 keyPressTimes.clear();
                 heldForMenu.clear();
+                pressedInGui.clear();
                 return;
             }
 
@@ -141,8 +155,18 @@ public class KeyHandler {
                 long duration = currentTime - pressTime;
 
                 boolean isF3 = Config.F3_RADIAL_MENU.get() && key.getValue() == GLFW.GLFW_KEY_F3;
+                
+                List<KeyMapping> activeMappings = ConflictManager.getActiveMappings(key);
+                
+                // If there are no selections and the default behavior is TRIGGER_ALL, 
+                // the conflict manager already unbound the conflict, allowing vanilla to natively handle it.
+                // We should NOT open the radial menu or intercept holds in this state,
+                // UNLESS the user is trying to hold it to open the menu to assign a new default.
+                // Wait, if TRIGGER_ALL is active, vanilla handles the tap natively. 
+                // But holding the key should STILL open the radial menu so they can make a selection!
+                boolean hasActiveConflict = !activeMappings.isEmpty();
 
-                if (duration > Config.HOLD_TIME.get() && (ConflictManager.hasConflict(key) || isF3)) {
+                if (duration > Config.HOLD_TIME.get() && (hasActiveConflict || isF3)) {
                     
                     if (mc.screen != null && !Config.ALLOW_GUI_OVERLAY.get()) {
                         continue; 
@@ -169,13 +193,13 @@ public class KeyHandler {
                     boolean isDoubleTapHold = wasDoubleTapped(key, pressTime);
                     
                     if (holdSelection != null && holdSelection == tapSelection && !isDoubleTapHold) {
-                        if (!holdSelection.isDown()) {
+                        if (mc.screen == null && !holdSelection.isDown()) {
                             holdSelection.setKey(key); 
                             holdSelection.setDown(true);
                             KeyMapping.click(key);
                             ((KeyMappingExtensions) holdSelection).incrementClickCounter();
                             
-                            MinecraftForge.EVENT_BUS.post(new InputEvent.Key(InputConstants.UNKNOWN.getValue(), 0, 0, 0));
+                            MinecraftForge.EVENT_BUS.post(new InputEvent.Key(key.getValue(), 0, 0, 0));
                         }
                     } else {
                         keyToOpen = key;
@@ -187,6 +211,12 @@ public class KeyHandler {
             if (keyToOpen != null) {
                 keyPressTimes.remove(keyToOpen); 
                 heldForMenu.put(keyToOpen, true);
+                pressedInGui.remove(keyToOpen);
+                
+                KeyMapping tapSelection = ConflictManager.getSelection(keyToOpen);
+                if (tapSelection != null) {
+                    tapSelection.setKey(InputConstants.UNKNOWN);
+                }
                 
                 if (Config.F3_RADIAL_MENU.get() && keyToOpen.getValue() == GLFW.GLFW_KEY_F3) {
                     mc.setScreen(new RadialMenuScreen(F3MenuManager.getMappings(), keyToOpen, mc.screen, false));
@@ -197,7 +227,7 @@ public class KeyHandler {
                         holdSelection.setKey(InputConstants.UNKNOWN);
                     }
                     
-                    List<KeyMapping> mappings = ConflictManager.getConflictingMappings(keyToOpen);
+                    List<KeyMapping> mappings = ConflictManager.getActiveMappings(keyToOpen);
                     mc.setScreen(new RadialMenuScreen(mappings, keyToOpen, mc.screen, true));
                 }
             }
@@ -218,48 +248,55 @@ public class KeyHandler {
         return false;
     }
 
-    public static boolean onRawInput(InputConstants.Key key, int scanCode, int action) {
+    public static boolean isPressedInGui(InputConstants.Key key) {
+        return pressedInGui.getOrDefault(key, false);
+    }
+
+    public static void onRawInput(InputConstants.Key key, int scanCode, int action) {
         Minecraft mc = Minecraft.getInstance();
 
         if (action == InputConstants.PRESS) {
             boolean isF3 = Config.F3_RADIAL_MENU.get() && key.getValue() == GLFW.GLFW_KEY_F3;
+            List<KeyMapping> activeMappings = ConflictManager.getActiveMappings(key);
+            boolean hasActiveConflict = !activeMappings.isEmpty();
             
-            if (ConflictManager.hasConflict(key) || isF3) {
+            if (hasActiveConflict || isF3) {
                 
-                if (mc.screen instanceof RadialMenuScreen) return false;
+                if (mc.screen instanceof RadialMenuScreen) return;
 
                 long currentTime = System.currentTimeMillis();
                 keyPressTimes.put(key, currentTime);
                 heldForMenu.put(key, false);
+                pressedInGui.put(key, mc.screen != null);
 
                 if (isF3) {
-                    if (mc.screen != null && !(mc.screen instanceof RadialMenuScreen)) {
-                        return false; 
-                    }
-                    return true;
+                    return;
                 }
 
                 KeyMapping holdSelection = ConflictManager.getHoldSelection(key);
                 KeyMapping tapSelection = ConflictManager.getSelection(key);
                 
-                if (holdSelection != null && holdSelection == tapSelection && !wasDoubleTapped(key, currentTime)) {
+                if (mc.screen == null && holdSelection != null && holdSelection == tapSelection && !wasDoubleTapped(key, currentTime)) {
                     holdSelection.setKey(key);
                     holdSelection.setDown(true);
                     KeyMapping.click(key);
                     ((KeyMappingExtensions) holdSelection).incrementClickCounter();
-                    // Do NOT set the key back to UNKNOWN here! Keep it bound while held.
                 }
 
-                // In GUIs, we must NOT globally intercept the initial press if we want vanilla components 
-                // to function identically to native behavior. 
-                // Instead of completely cancelling the event, we let the press go through to the GUI. 
-                // Because ConflictManager unbinds it, the GUI won't trigger the action YET.
-                // We will manually trigger the action on release.
-                if (mc.screen != null && !(mc.screen instanceof RadialMenuScreen)) {
-                    return false; 
+                if (mc.screen != null) {
+                    if (tapSelection != null) {
+                        try {
+                            if (tapSelection.getKeyConflictContext().isActive()) {
+                                tapSelection.setKey(key); 
+                            }
+                        } catch (Exception e) {}
+                    }
+                } else if (tapSelection == null && holdSelection == null && Config.DEFAULT_TAP_BEHAVIOR.get() == Config.DefaultHoldBehavior.TRIGGER_ALL) {
+                    // If TRIGGER_ALL is enabled and nothing is selected, the keys were rebound natively by ConflictManager.
+                    // We still intercept to populate keyPressTimes (so the user can hold to open the radial menu),
+                    // but we do NOT want to interrupt native vanilla processing of the tap.
+                    // Vanilla will process the keypress natively since its key is legitimately bound!
                 }
-
-                return true;
             }
         } else if (action == InputConstants.RELEASE) {
             long currentTime = System.currentTimeMillis();
@@ -267,21 +304,15 @@ public class KeyHandler {
             
             Long pressTime = keyPressTimes.remove(key);
             Boolean wasHeldForMenu = heldForMenu.remove(key);
+            Boolean wasPressedInGui = pressedInGui.remove(key);
             
             if (Config.F3_RADIAL_MENU.get() && key.getValue() == GLFW.GLFW_KEY_F3) {
-                if (wasHeldForMenu != null && wasHeldForMenu) {
-                    // It was held for the menu, so we intercept the release to prevent the debug screen from toggling.
-                    return true;
-                } else {
-                    // It was a tap, let vanilla handle it normally so the debug screen opens.
-                    return false;
-                }
+                return;
             }
             
             KeyMapping holdSelection = ConflictManager.getHoldSelection(key);
             if (holdSelection != null) {
                 holdSelection.setDown(false);
-                // Only set it back to UNKNOWN when it is actually released.
                 holdSelection.setKey(InputConstants.UNKNOWN);
             }
             
@@ -290,51 +321,43 @@ public class KeyHandler {
                 
                 if (duration <= Config.HOLD_TIME.get()) {
                     KeyMapping selection = ConflictManager.getSelection(key);
+                    
+                    // Do nothing on release if TRIGGER_ALL is active and no selection is made
+                    if (selection == null && holdSelection == null && Config.DEFAULT_TAP_BEHAVIOR.get() == Config.DefaultHoldBehavior.TRIGGER_ALL) {
+                        return;
+                    }
+                    
                     if (selection != null) {
                         
-                        selection.setKey(key);
-
-                        Screen activeScreen = mc.screen;
-                        if (activeScreen != null && !(activeScreen instanceof RadialMenuScreen)) {
-                            // Defer the execution of the tap into the GUI using enqueueWork 
-                            // to ensure it happens completely independently of the active key poll loop
-                            mc.tell(() -> {
-                                if (mc.screen != null) {
-                                    mc.screen.keyPressed(key.getValue(), scanCode, 0);
-                                    if (mc.screen != null) {
-                                        mc.screen.keyReleased(key.getValue(), scanCode, 0);
-                                    } else {
-                                        while (selection.consumeClick()) {}
-                                    }
-                                }
-                                selection.setKey(InputConstants.UNKNOWN);
-                            });
-                            
-                            // We don't unbind immediately here, we let the scheduled task unbind it
-                            return false;
-                            
-                        } else {
-                            ((KeyMappingExtensions) selection).incrementClickCounter();
-                            selection.setDown(true);
-                            selection.setDown(false);
-                            selection.setKey(InputConstants.UNKNOWN);
-                            
-                            MinecraftForge.EVENT_BUS.post(new InputEvent.Key(InputConstants.UNKNOWN.getValue(), 0, 0, 0));
+                        if (wasPressedInGui != null && wasPressedInGui) {
+                            mc.tell(() -> selection.setKey(InputConstants.UNKNOWN));
+                            return;
                         }
+
+                        try {
+                            if (!selection.getKeyConflictContext().isActive()) {
+                                return; 
+                            }
+                        } catch (Exception e) {}
                         
-                    } else if (mc.player != null && (mc.screen == null || mc.screen instanceof RadialMenuScreen)) {
-                        mc.player.displayClientMessage(Component.literal("Press and hold to assign an action!").withStyle(ChatFormatting.RED), true);
+                        selection.setKey(key);
+                        ((KeyMappingExtensions) selection).incrementClickCounter();
+                        selection.setDown(true);
+                        
+                        MinecraftForge.EVENT_BUS.post(new InputEvent.Key(key.getValue(), scanCode, 0, 0));
+                        
+                        selection.setDown(false);
+                        selection.setKey(InputConstants.UNKNOWN);
+                        
+                    } else if (mc.player != null && mc.screen == null) {
+                        // We only show the warning message if DO_NOTHING is active.
+                        if (Config.DEFAULT_TAP_BEHAVIOR.get() == Config.DefaultHoldBehavior.DO_NOTHING) {
+                            mc.player.displayClientMessage(Component.literal("Press and hold to assign an action!").withStyle(ChatFormatting.RED), true);
+                        }
                     }
                 }
             }
-            
-            if (mc.screen instanceof RadialMenuScreen) return false;
-            
-            if (ConflictManager.hasConflict(key)) {
-                return true;
-            }
         }
-        return false;
     }
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
@@ -342,19 +365,7 @@ public class KeyHandler {
         if (isSimulatingF3) return;
 
         InputConstants.Key key = InputConstants.getKey(event.getKey(), event.getScanCode());
-        
-        boolean cancelF3Release = false;
-        if (Config.F3_RADIAL_MENU.get() && key.getValue() == GLFW.GLFW_KEY_F3 && event.getAction() == GLFW.GLFW_RELEASE) {
-            if (heldForMenu.getOrDefault(key, false)) {
-                cancelF3Release = true;
-            }
-        }
-        
-        if (onRawInput(key, event.getScanCode(), event.getAction())) {
-            if (cancelF3Release) {
-                event.setCanceled(true);
-            }
-        }
+        onRawInput(key, event.getScanCode(), event.getAction());
     }
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
@@ -362,9 +373,7 @@ public class KeyHandler {
         if (isSimulatingF3) return;
 
         InputConstants.Key key = InputConstants.Type.MOUSE.getOrCreate(event.getButton());
-        if (onRawInput(key, -1, event.getAction())) {
-            event.setCanceled(true);
-        }
+        onRawInput(key, -1, event.getAction());
     }
 
     @SubscribeEvent

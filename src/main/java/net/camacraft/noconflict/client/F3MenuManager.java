@@ -29,7 +29,6 @@ public class F3MenuManager {
         F3_MAPPINGS.add(new F3ActionMapping("Show Hitboxes (B)", GLFW.GLFW_KEY_B));
         F3_MAPPINGS.add(new F3ActionMapping("Copy Location (C)", GLFW.GLFW_KEY_C));
         F3_MAPPINGS.add(new F3ActionMapping("Clear Chat (D)", GLFW.GLFW_KEY_D));
-        F3_MAPPINGS.add(new F3ActionMapping("Render Distance (F)", GLFW.GLFW_KEY_F));
         F3_MAPPINGS.add(new F3ActionMapping("Chunk Borders (G)", GLFW.GLFW_KEY_G));
         F3_MAPPINGS.add(new F3ActionMapping("Advanced Tooltips (H)", GLFW.GLFW_KEY_H));
         F3_MAPPINGS.add(new F3ActionMapping("Copy Entity Data (I)", GLFW.GLFW_KEY_I));
@@ -39,7 +38,6 @@ public class F3MenuManager {
         F3_MAPPINGS.add(new F3ActionMapping("Reload Resource Packs (T)", GLFW.GLFW_KEY_T));
         F3_MAPPINGS.add(new F3ActionMapping("Gamemode Switcher (F4)", GLFW.GLFW_KEY_F4));
         F3_MAPPINGS.add(new F3ActionMapping("Frame Time Graph (Alt)", GLFW.GLFW_KEY_LEFT_ALT));
-        F3_MAPPINGS.add(new F3ActionMapping("Profiler Graph (Shift)", GLFW.GLFW_KEY_LEFT_SHIFT));
     }
 
     public static List<KeyMapping> getMappings() {

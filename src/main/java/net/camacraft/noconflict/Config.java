@@ -18,16 +18,20 @@ public class Config
 
     // General
     public static final ForgeConfigSpec.BooleanValue F3_RADIAL_MENU;
+    public static final ForgeConfigSpec.BooleanValue TRIGGER_ON_SELECTION;
     public static final ForgeConfigSpec.IntValue HOLD_TIME;
     public static final ForgeConfigSpec.IntValue DOUBLE_TAP_TIME;
-    public static final ForgeConfigSpec.EnumValue<DefaultHoldBehavior> DEFAULT_HOLD_BEHAVIOR;
+    public static final ForgeConfigSpec.EnumValue<DefaultHoldBehavior> DEFAULT_TAP_BEHAVIOR;
 
     // Filters & Defaults
+    public static final ForgeConfigSpec.ConfigValue<List<? extends String>> ABANDONED_KEYS;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> IGNORED_CATEGORIES;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> IGNORED_KEYBINDS;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> DEFAULT_SELECTIONS;
 
     // Radial Menu
+    public static final ForgeConfigSpec.BooleanValue PAGINATION_ENABLED;
+    public static final ForgeConfigSpec.IntValue ITEMS_PER_PAGE;
     public static final ForgeConfigSpec.IntValue RADIUS;
     public static final ForgeConfigSpec.DoubleValue BACKGROUND_OPACITY;
     public static final ForgeConfigSpec.BooleanValue ALLOW_GUI_OVERLAY;
@@ -55,6 +59,10 @@ public class Config
         F3_RADIAL_MENU = BUILDER
                 .comment("Whether holding the F3 key should open a radial menu with debug actions.")
                 .define("f3RadialMenu", true);
+                
+        TRIGGER_ON_SELECTION = BUILDER
+                .comment("Whether selecting an action on the radial menu should immediately trigger it once the menu closes.")
+                .define("triggerOnSelection", true);
 
         HOLD_TIME = BUILDER
                 .comment("The time in milliseconds a key must be held down to open the radial menu when in tap mode. If a key is pressed quickly (less than this time), it triggers the action.")
@@ -64,13 +72,17 @@ public class Config
                 .comment("The maximum time in milliseconds between two taps to register as a double tap. In hold mode, the user must double tap the key and hold on the second tap to access the radial menu.")
                 .defineInRange("doubleTapTime", 300, 50, 1000);
 
-        DEFAULT_HOLD_BEHAVIOR = BUILDER
-                .comment("What should happen when a conflicted key is held down, but no master keybind is set for it. DO_NOTHING is recommended.")
+        DEFAULT_TAP_BEHAVIOR = BUILDER
+                .comment("What should happen when a conflicted key is pressed, but no selection is made on the radial menu. DO_NOTHING is recommended.")
                 .defineEnum("defaultHoldBehavior", DefaultHoldBehavior.DO_NOTHING);
 
         BUILDER.pop();
 
         BUILDER.push("Filters & Defaults");
+
+        ABANDONED_KEYS = BUILDER
+                .comment("A list of physical keys that NoConflict should completely ignore. This is useful for left and right click, as many mods already have built-in logic to handle click conflicts natively.")
+                .defineList("abandonedKeys", List.of("key.mouse.left", "key.mouse.right"), obj -> obj instanceof String);
 
         IGNORED_CATEGORIES = BUILDER
                 .comment("A list of keybind categories to ignore conflicts for. If ANY conflicting keybind belongs to one of these categories, the radial menu will NOT open and the game will handle the keys normally.")
@@ -79,7 +91,7 @@ public class Config
         IGNORED_KEYBINDS = BUILDER
                 .comment("A list of specific keybind names to ignore conflicts for. For example, 'key.attack' for left click, or 'key.use' for right click.")
                 .defineList("ignoredKeybinds", List.of("key.attack", "key.use"), obj -> obj instanceof String);
-
+        
         DEFAULT_SELECTIONS = BUILDER
                 .comment("A list of default selections for conflicting keybinds when the game loads. Format: 'trigger_key:mode:keybind_name'. Mode is either 'tap' or 'hold'. E.g., 'key.keyboard.1:tap:key.hotbar.1'")
                 .defineList("defaultSelections", List.of(), obj -> obj instanceof String);
@@ -87,6 +99,14 @@ public class Config
         BUILDER.pop();
 
         BUILDER.push("Radial Menu");
+
+        PAGINATION_ENABLED = BUILDER
+                .comment("Whether to paginate the radial menu if there are too many options. You can scroll with the mouse wheel to switch pages.")
+                .define("paginationEnabled", true);
+
+        ITEMS_PER_PAGE = BUILDER
+                .comment("The maximum number of actions to display per page on the radial menu.")
+                .defineInRange("itemsPerPage", 8, 2, 24);
 
         RADIUS = BUILDER
                 .comment("The base radius (distance from the center) of the options in the radial menu.")
