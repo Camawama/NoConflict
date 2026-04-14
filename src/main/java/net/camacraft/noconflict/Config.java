@@ -112,10 +112,6 @@ public class Config
                 .comment("The base radius (distance from the center) of the options in the radial menu.")
                 .defineInRange("radius", 80, 20, 300);
 
-        BACKGROUND_OPACITY = BUILDER
-                .comment("The opacity/darkness of the background when the radial menu is open (0.0 = transparent, 1.0 = fully black).")
-                .defineInRange("backgroundOpacity", 0.5, 0.0, 1.0);
-
         ALLOW_GUI_OVERLAY = BUILDER
                 .comment("Whether the radial menu should be allowed to open and overlay on top of other GUIs (like the Inventory).")
                 .define("allowGuiOverlay", false);
@@ -127,6 +123,10 @@ public class Config
         BUILDER.pop();
 
         BUILDER.push("Radial Menu Visuals");
+
+        BACKGROUND_OPACITY = BUILDER
+                .comment("The opacity/darkness of the background when the radial menu is open (0.0 = transparent, 1.0 = fully black).")
+                .defineInRange("backgroundOpacity", 0.5, 0.0, 1.0);
 
         TEXT_SCALE = BUILDER
                 .comment("The scale of the text for the options in the radial menu.")
