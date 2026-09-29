@@ -1,0 +1,23 @@
+{
+  "noconflict.radial.title": "Radial Menu",
+  "noconflict.radial.hold_indicator": " (Hold)",
+  "noconflict.message.hold_to_assign": "Press and hold to assign an action!",
+  "noconflict.command.cleared_all": "Cleared all NoConflict selections.",
+  "noconflict.command.cleared_key": "Cleared NoConflict selections for %s.",
+  "noconflict.command.nothing_to_clear": "No NoConflict selections found for %s.",
+  "noconflict.command.invalid_key": "Unknown key name: %s",
+  "noconflict.command.no_keybinds": "No keybindings found in category: %s",
+  "noconflict.f3.reload_chunks": "Reload Chunks (A)",
+  "noconflict.f3.show_hitboxes": "Show Hitboxes (B)",
+  "noconflict.f3.copy_location": "Copy Location (C)",
+  "noconflict.f3.clear_chat": "Clear Chat (D)",
+  "noconflict.f3.chunk_borders": "Chunk Borders (G)",
+  "noconflict.f3.advanced_tooltips": "Advanced Tooltips (H)",
+  "noconflict.f3.copy_entity_data": "Copy Entity Data (I)",
+  "noconflict.f3.spectator": "Spectator Mode (N)",
+  "noconflict.f3.pause_on_lost_focus": "Pause on Lost Focus (P)",
+  "noconflict.f3.f3_help": "Show F3 Help (Q)",
+  "noconflict.f3.reload_resource_packs": "Reload Resource Packs (T)",
+  "noconflict.f3.toggle_creative": "Toggle Creative/Survival (F4)",
+  "noconflict.f3.frame_time_graph": "Frame Time Graph (Alt)"
+}

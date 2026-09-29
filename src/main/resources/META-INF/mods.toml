@@ -1,7 +1,6 @@
 modLoader="javafml"
 loaderVersion="${loader_version_range}"
 license="${mod_license}"
-properties.noconflict.mixinConfigs="noconflict.mixins.json"
 
 [[mods]]
 modId="${mod_id}"
@@ -9,6 +8,8 @@ version="${mod_version}"
 displayName="${mod_name}"
 authors="${mod_authors}"
 description='''${mod_description}'''
+# Client-only mod: don't flag servers without it as incompatible in the server list
+displayTest="IGNORE_ALL_VERSION"
 
 [[dependencies.${mod_id}]]
     modId="forge"
@@ -23,3 +24,11 @@ description='''${mod_description}'''
     versionRange="${minecraft_version_range}"
     ordering="NONE"
     side="BOTH"
+
+# Shared library; this mod is client-only, so only clients need it
+[[dependencies.${mod_id}]]
+    modId="camafy"
+    mandatory=true
+    versionRange="${camafy_version_range}"
+    ordering="AFTER"
+    side="CLIENT"

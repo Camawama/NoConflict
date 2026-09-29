@@ -6,4 +6,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Public API for other mods: `net.camacraft.noconflict.api.NoConflictApi` exposes
+  `isManaged(KeyMapping)`, `getPhysicalKey(KeyMapping)`, `getTapSelection(Key)` and
+  `getHoldSelection(Key)` so HUD/keybind mods (e.g. Binders) can display the real
+  physical key and routing of a conflicted keybind instead of "Not Bound".
+- Radial menu selections now persist across game restarts (config/noconflict-selections.json).
+- `/noconflict clear [key]` client command to clear all selections or a single key's selection.
+- A hold selection that differs from the tap selection now activates on long-press (the radial
+  menu is reached via double-tap-and-hold, same as when hold and tap match).
+- English localization file; all user-facing strings are now translatable.
+- Runtime rebinds by other mods are now detected and adopted instead of being stomped every tick.
+- Keybinds silently unbound because they conflict with an ignored keybind are now logged.
+
+### Fixed
+- Keybinds sharing a key with an ignored keybind (e.g. Grappling Hook's climb/slow/detach on
+  Sneak and Jump) were silently unbound, making those mod features unusable. They are now left
+  natively bound by default so both actions trigger, exactly as without No Conflict; the old
+  behavior is available via the new `ignoredConflictBehavior = UNBIND` config option.
+- Synthetic taps were invisible to mods that poll KeyMapping#isDown() in a tick handler (e.g.
+  Wall Jump's cling/jump key): the down/up pulse happened between ticks. The synthetic press is
+  now held until the end of the next full game tick, so polling mods see the tap.
+- Every key/mouse press was processed twice (mixin + Forge input event), causing double
+  activations for hold-mode keybinds. Input now flows through a single entry point.
+- A quick tap on a hold-mode key fired the action on press AND again on release.
+- Unbinding a conflicted key in the Controls screen was silently undone on close.
+- ESC in the radial menu now returns to the parent screen instead of closing everything.
+- The radial menu no longer overlays server-backed container screens (chests etc.), which
+  desynced the container; the player inventory still works.
+- The radial menu overlay now keeps the hidden parent screen laid out after window resizes.
+- Synthetic input events now carry a proper PRESS+RELEASE pair with real modifiers, and mouse
+  trigger keys post mouse events instead of bogus keyboard events.
+- Mouse trigger keys are no longer fed to Screen#keyPressed as fake keyboard codes.
+- Frame Time Graph (F3+Alt) now toggles instead of only turning on.
+- "Show Debug Profiler (Q)" relabeled to "Show F3 Help (Q)" (what F3+Q actually does);
+  "Gamemode Switcher (F4)" relabeled to "Toggle Creative/Survival (F4)" (what it actually does).
+- F3 action reflection now uses ObfuscationReflectionHelper on KeyboardHandler.class and logs
+  when it fails instead of silently doing nothing.
+- Keybinds bound with different explicit Forge key modifiers (e.g. B vs SHIFT+B) are no longer
+  treated as conflicting.
+- `/noconflict` is now a client command (it referenced client-only classes and could crash a
+  dedicated server when executed).
+- The F3 radial menu no longer registers ghost KeyMappings in vanilla's static keybind maps.
+- Dead code removed: unused isSimulatingF3 guard, empty mod-lifecycle handlers, redundant
+  double initialization, no-op mixinConfigs line in mods.toml, redundant access transformer.
+- F3+key debug combos (vanilla's, and other mods' such as Full Stop's F3+V) no longer also tap
+  or hold the key's routed keybind, and no longer let the held F3 open its radial menu.
+- Keybinds unbound under `ignoredConflictBehavior = UNBIND` (and ones the user unbound) are no
+  longer reported to Camafy as reachable from the radial menu, so overlays such as Binders show
+  them as "Not Bound" instead of "X (menu)".
+
+### Changed
+- Config: `defaultHoldBehavior` renamed to `defaultTapBehavior` (it governs tap behavior);
+  existing configs will regenerate this entry with the default value.
+- Config: `holdTime` minimum raised from 0 to 50 ms (0 made tapping impossible).
+- Config: color options now validate their hex format at load time.
+- mods.toml: added displayTest="IGNORE_ALL_VERSION" so servers without the mod aren't flagged
+  as incompatible.
+
+## [0.0.1]
+
+### Added
 - Initial project setup.

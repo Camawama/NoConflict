@@ -30,12 +30,15 @@ The mod is highly configurable via the `noconflict-client.toml` file located in 
 - `f3RadialMenu` (Default: `true`): Whether holding the F3 key should open a special radial menu type with debug actions.
 - `holdTime` (Default: `200`): The time in milliseconds a key must be held down to open the radial menu when in tap mode. If pressed quickly, it triggers the action.
 - `doubleTapTime` (Default: `300`): The maximum time in milliseconds between two taps to register as a double-tap. Required to open the menu when an action is set to Hold mode.
-- `defaultHoldBehavior` (Default: `DO_NOTHING`): What should happen when a conflicted key is held down but no master keybind is set for it.
+- `defaultTapBehavior` (Default: `DO_NOTHING`): What should happen when a conflicted key is tapped but no selection has been made for it (`DO_NOTHING` or `TRIGGER_ALL`).
 
 ## Filters & Defaults
-- `ignoredCategories` (Default: `["key.categories.movement"]`): A list of keybind categories to ignore. If a key has an action in this category, all other conflicting actions on that key are gracefully suppressed to prevent annoying vanilla double-triggering.
+- `ignoredCategories` (Default: `["key.categories.movement"]`): A list of keybind categories to ignore. Keys with an action in these categories are handled by the game normally and never open a radial menu.
 - `ignoredKeybinds` (Default: `["key.attack", "key.use"]`): Specific keybind names to ignore conflicts for (like left/right click).
-- `defaultSelections`: A list to manually define default selections for conflicts when the game loads (). Format: `trigger_key:mode:keybind_name`. Example: `key.keyboard.1:tap:key.hotbar.1`.
+- `ignoredConflictBehavior` (Default: `KEEP_BOUND`): What to do with keybinds that share a key with an ignored keybind. `KEEP_BOUND` leaves them bound so both actions trigger natively — many mods overlay movement keys on purpose (e.g. Grappling Hook's climb on Sneak) and only act in context. `UNBIND` unbinds them to prevent double-triggering.
+- `defaultSelections`: A list to manually define default selections for conflicts when the game loads. Format: `trigger_key:mode:keybind_name`. Example: `key.keyboard.1:tap:key.hotbar.1`.
+
+Selections you make on the radial menu are saved automatically to `config/noconflict-selections.json` and restored on the next launch (they take priority over `defaultSelections`).
 
 ## Radial Menu Settings
 - `radius` (Default: `80`): The base distance from the center for the options in the radial menu.
@@ -44,7 +47,7 @@ The mod is highly configurable via the `noconflict-client.toml` file located in 
 - `guiOverlayBlacklist`: Screens where the radial menu is explicitly forbidden from opening.
 
 ## Radial Menu Visuals
-All colors use the ARGB hex format (e.g., `FFFFFFFF` for solid white, `44FFFFFF` for translucent white).
+All colors use the ARGB hex format (e.g., `FFFFFFFF` for solid white, `44FFFFFF` for translucent white). A 6-digit RGB value (e.g., `FFFFFF`) is treated as fully opaque.
 
 - `textScale` (Default: `1.0`): The scale of the text.
 - `animationSpeed` (Default: `7.0`): Controls the snappiness of the hover animations.
@@ -58,3 +61,24 @@ All colors use the ARGB hex format (e.g., `FFFFFFFF` for solid white, `44FFFFFF`
 ## Radial Menu Audio
 - `toggleSound` (Default: `true`): Whether a UI click sound plays when making a selection.
 - `toggleVolume` (Default: `0.5`): Volume of the toggle sound (0.0 to 1.0).
+
+# Commands
+
+All commands are client-side:
+- `/noconflict list keys` — list every keybind ID.
+- `/noconflict list categories` — list every keybind category.
+- `/noconflict find <category>` — list the keybinds in a category with their bound keys.
+- `/noconflict clear` — clear all saved tap/hold selections.
+- `/noconflict clear <key>` — clear the selections for one physical key (e.g. `key.keyboard.b`).
+
+# Known Limitations
+
+These follow from the unbind-and-intercept design and are worth knowing about:
+
+- **Mods that poll `isDown()` in a tick handler** observe a *tap* as exactly one tick of the key being down (the synthetic press is held until the end of the next full tick). For "while held" style keybinds (charging, clinging, sprint-like abilities), enable **Hold mode** for them on the radial menu — then they mirror the physical key for the whole press and behave natively.
+- **Mods that read raw GLFW state** (instead of their `KeyMapping`) bypass No Conflict entirely and will still trigger alongside your selection. Add such keybinds to `ignoredKeybinds`.
+- **Mods that display their keybind on the HUD** may show it as unbound while No Conflict manages it. Cosmetic only.
+- **Keybinds that conflict with an ignored keybind** (e.g. anything sharing a key with movement keys, which are ignored by default) get no radial menu. By default they stay natively bound so all actions on the key trigger together, like vanilla (`ignoredConflictBehavior = KEEP_BOUND`); set it to `UNBIND` to unbind them instead. Either way it is logged at startup.
+- **Custom keybind screens from other mods** that don't extend the vanilla `KeyBindsScreen` will show managed keys as unbound. Use the vanilla Controls screen to edit them.
+- **GUI-context keybinds** (hotkeys used inside inventories) can only be resolved through the radial menu if `allowGuiOverlay` is enabled; server-backed container screens (chests etc.) never allow the overlay because swapping screens away from them would desync the container.
+- **The F4 entry on the F3 menu** toggles creative/survival via `/gamemode`, so it needs operator permission on servers.

@@ -1,20 +1,27 @@
 package net.camacraft.noconflict.client;
 
-import com.mojang.blaze3d.platform.InputConstants;
-import net.minecraft.client.KeyMapping;
 import org.lwjgl.glfw.GLFW;
 
-import java.util.ArrayList;
 import java.util.List;
 
 public class F3MenuManager {
 
-    public static class F3ActionMapping extends KeyMapping {
+    /**
+     * A debug-screen action shown on the F3 radial menu. Deliberately NOT a KeyMapping:
+     * constructing KeyMappings would register ghost entries in vanilla's static maps.
+     */
+    public static class F3Action implements RadialAction {
+        private final String translationKey;
         private final int targetKey;
 
-        public F3ActionMapping(String name, int targetKey) {
-            super(name, InputConstants.Type.KEYSYM, InputConstants.UNKNOWN.getValue(), "F3 Actions");
+        public F3Action(String translationKey, int targetKey) {
+            this.translationKey = translationKey;
             this.targetKey = targetKey;
+        }
+
+        @Override
+        public String getActionName() {
+            return translationKey;
         }
 
         public int getTargetKey() {
@@ -22,25 +29,23 @@ public class F3MenuManager {
         }
     }
 
-    private static final List<KeyMapping> F3_MAPPINGS = new ArrayList<>();
+    private static final List<RadialAction> F3_ACTIONS = List.of(
+            new F3Action("noconflict.f3.reload_chunks", GLFW.GLFW_KEY_A),
+            new F3Action("noconflict.f3.show_hitboxes", GLFW.GLFW_KEY_B),
+            new F3Action("noconflict.f3.copy_location", GLFW.GLFW_KEY_C),
+            new F3Action("noconflict.f3.clear_chat", GLFW.GLFW_KEY_D),
+            new F3Action("noconflict.f3.chunk_borders", GLFW.GLFW_KEY_G),
+            new F3Action("noconflict.f3.advanced_tooltips", GLFW.GLFW_KEY_H),
+            new F3Action("noconflict.f3.copy_entity_data", GLFW.GLFW_KEY_I),
+            new F3Action("noconflict.f3.spectator", GLFW.GLFW_KEY_N),
+            new F3Action("noconflict.f3.pause_on_lost_focus", GLFW.GLFW_KEY_P),
+            new F3Action("noconflict.f3.f3_help", GLFW.GLFW_KEY_Q),
+            new F3Action("noconflict.f3.reload_resource_packs", GLFW.GLFW_KEY_T),
+            new F3Action("noconflict.f3.toggle_creative", GLFW.GLFW_KEY_F4),
+            new F3Action("noconflict.f3.frame_time_graph", GLFW.GLFW_KEY_LEFT_ALT)
+    );
 
-    static {
-        F3_MAPPINGS.add(new F3ActionMapping("Reload Chunks (A)", GLFW.GLFW_KEY_A));
-        F3_MAPPINGS.add(new F3ActionMapping("Show Hitboxes (B)", GLFW.GLFW_KEY_B));
-        F3_MAPPINGS.add(new F3ActionMapping("Copy Location (C)", GLFW.GLFW_KEY_C));
-        F3_MAPPINGS.add(new F3ActionMapping("Clear Chat (D)", GLFW.GLFW_KEY_D));
-        F3_MAPPINGS.add(new F3ActionMapping("Chunk Borders (G)", GLFW.GLFW_KEY_G));
-        F3_MAPPINGS.add(new F3ActionMapping("Advanced Tooltips (H)", GLFW.GLFW_KEY_H));
-        F3_MAPPINGS.add(new F3ActionMapping("Copy Entity Data (I)", GLFW.GLFW_KEY_I));
-        F3_MAPPINGS.add(new F3ActionMapping("Spectator Mode (N)", GLFW.GLFW_KEY_N));
-        F3_MAPPINGS.add(new F3ActionMapping("Pause on Lost Focus (P)", GLFW.GLFW_KEY_P));
-        F3_MAPPINGS.add(new F3ActionMapping("Show Debug Profiler (Q)", GLFW.GLFW_KEY_Q));
-        F3_MAPPINGS.add(new F3ActionMapping("Reload Resource Packs (T)", GLFW.GLFW_KEY_T));
-        F3_MAPPINGS.add(new F3ActionMapping("Gamemode Switcher (F4)", GLFW.GLFW_KEY_F4));
-        F3_MAPPINGS.add(new F3ActionMapping("Frame Time Graph (Alt)", GLFW.GLFW_KEY_LEFT_ALT));
-    }
-
-    public static List<KeyMapping> getMappings() {
-        return F3_MAPPINGS;
+    public static List<RadialAction> getActions() {
+        return F3_ACTIONS;
     }
 }

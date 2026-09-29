@@ -1,19 +1,19 @@
 package net.camacraft.noconflict;
 
 import net.minecraftforge.common.ForgeConfigSpec;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.event.config.ModConfigEvent;
 
 import java.util.List;
 
-@Mod.EventBusSubscriber(modid = NoConflict.MODID, bus = Mod.EventBusSubscriber.Bus.MOD)
 public class Config
 {
     private static final ForgeConfigSpec.Builder BUILDER = new ForgeConfigSpec.Builder();
 
-    public enum DefaultHoldBehavior {
+    public enum DefaultTapBehavior {
         DO_NOTHING, TRIGGER_ALL
+    }
+
+    public enum IgnoredConflictBehavior {
+        KEEP_BOUND, UNBIND
     }
 
     // General
@@ -21,12 +21,13 @@ public class Config
     public static final ForgeConfigSpec.BooleanValue TRIGGER_ON_SELECTION;
     public static final ForgeConfigSpec.IntValue HOLD_TIME;
     public static final ForgeConfigSpec.IntValue DOUBLE_TAP_TIME;
-    public static final ForgeConfigSpec.EnumValue<DefaultHoldBehavior> DEFAULT_TAP_BEHAVIOR;
+    public static final ForgeConfigSpec.EnumValue<DefaultTapBehavior> DEFAULT_TAP_BEHAVIOR;
 
     // Filters & Defaults
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> ABANDONED_KEYS;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> IGNORED_CATEGORIES;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> IGNORED_KEYBINDS;
+    public static final ForgeConfigSpec.EnumValue<IgnoredConflictBehavior> IGNORED_CONFLICT_BEHAVIOR;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> DEFAULT_SELECTIONS;
 
     // Radial Menu
@@ -66,15 +67,15 @@ public class Config
 
         HOLD_TIME = BUILDER
                 .comment("The time in milliseconds a key must be held down to open the radial menu when in tap mode. If a key is pressed quickly (less than this time), it triggers the action.")
-                .defineInRange("holdTime", 200, 0, 2000);
+                .defineInRange("holdTime", 200, 50, 2000);
                 
         DOUBLE_TAP_TIME = BUILDER
                 .comment("The maximum time in milliseconds between two taps to register as a double tap. In hold mode, the user must double tap the key and hold on the second tap to access the radial menu.")
                 .defineInRange("doubleTapTime", 300, 50, 1000);
 
         DEFAULT_TAP_BEHAVIOR = BUILDER
-                .comment("What should happen when a conflicted key is pressed, but no selection is made on the radial menu. DO_NOTHING is recommended.")
-                .defineEnum("defaultHoldBehavior", DefaultHoldBehavior.DO_NOTHING);
+                .comment("What should happen when a conflicted key is TAPPED, but no selection is made on the radial menu. DO_NOTHING is recommended.")
+                .defineEnum("defaultTapBehavior", DefaultTapBehavior.DO_NOTHING);
 
         BUILDER.pop();
 
@@ -91,7 +92,13 @@ public class Config
         IGNORED_KEYBINDS = BUILDER
                 .comment("A list of specific keybind names to ignore conflicts for. For example, 'key.attack' for left click, or 'key.use' for right click.")
                 .defineList("ignoredKeybinds", List.of("key.attack", "key.use"), obj -> obj instanceof String);
-        
+
+        IGNORED_CONFLICT_BEHAVIOR = BUILDER
+                .comment("What to do with keybinds that share a key with an ignored keybind.",
+                        "KEEP_BOUND: leave them bound, so both actions trigger natively - exactly as without No Conflict. Many mods overlay movement keys on purpose (e.g. Grappling Hook's climb on Sneak, detach on Jump) and only act in context, so this is the compatible default.",
+                        "UNBIND: unbind them to prevent double-triggering. They become unusable and get no radial menu.")
+                .defineEnum("ignoredConflictBehavior", IgnoredConflictBehavior.KEEP_BOUND);
+
         DEFAULT_SELECTIONS = BUILDER
                 .comment("A list of default selections for conflicting keybinds when the game loads. Format: 'trigger_key:mode:keybind_name'. Mode is either 'tap' or 'hold'. E.g., 'key.keyboard.1:tap:key.hotbar.1'")
                 .defineList("defaultSelections", List.of(), obj -> obj instanceof String);
@@ -137,28 +144,28 @@ public class Config
                 .defineInRange("animationSpeed", 7.0, 1.0, 20.0);
 
         SEPARATOR_COLOR = BUILDER
-                .comment("The color of the separator lines in the radial menu (ARGB hex format).")
-                .define("separatorColor", "44FFFFFF");
+                .comment("The color of the separator lines in the radial menu (hex AARRGGBB, or RRGGBB for fully opaque).")
+                .define("separatorColor", "44FFFFFF", Config::isValidColor);
 
         REGULAR_ITEM_COLOR = BUILDER
                 .comment("The color for a regular (non-selected) item.")
-                .define("regularItemColor", "FFFFFFFF"); // White
+                .define("regularItemColor", "FFFFFFFF", Config::isValidColor); // White
 
         HOVERED_ITEM_COLOR = BUILDER
                 .comment("The color for a regular item when hovered.")
-                .define("hoveredItemColor", "FFFFFF00"); // Yellow
+                .define("hoveredItemColor", "FFFFFF00", Config::isValidColor); // Yellow
 
         SELECTED_ITEM_COLOR = BUILDER
                 .comment("The color for a selected item.")
-                .define("selectedItemColor", "FF00AAAA"); // Dark Cyan
+                .define("selectedItemColor", "FF00AAAA", Config::isValidColor); // Dark Cyan
 
         SELECTED_HOVERED_ITEM_COLOR = BUILDER
                 .comment("The color for a selected item when hovered.")
-                .define("selectedHoveredItemColor", "FF55FFFF"); // Cyan
-        
+                .define("selectedHoveredItemColor", "FF55FFFF", Config::isValidColor); // Cyan
+
         HOLD_INDICATOR_COLOR = BUILDER
                 .comment("The color of the '(Hold)' text indicator.")
-                .define("holdIndicatorColor", "FF55FF55"); // Green
+                .define("holdIndicatorColor", "FF55FF55", Config::isValidColor); // Green
 
         BUILDER.pop();
 
@@ -177,16 +184,18 @@ public class Config
 
     public static final ForgeConfigSpec SPEC = BUILDER.build();
 
+    private static boolean isValidColor(Object obj) {
+        return obj instanceof String s && s.matches("(?i)[0-9a-f]{1,8}");
+    }
+
     public static int getIntColor(ForgeConfigSpec.ConfigValue<String> colorValue) {
+        String hex = colorValue.get();
         try {
-            return (int) Long.parseLong(colorValue.get(), 16);
+            int color = (int) Long.parseLong(hex, 16);
+            // Up to 6 digits is plain RRGGBB: make it opaque rather than alpha 0 (invisible).
+            return hex.length() <= 6 ? color | 0xFF000000 : color;
         } catch (NumberFormatException e) {
             return 0xFFFFFFFF; // Default to white on error
         }
-    }
-
-    @SubscribeEvent
-    static void onLoad(final ModConfigEvent event)
-    {
     }
 }
