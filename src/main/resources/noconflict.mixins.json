@@ -8,9 +8,10 @@
   ],
   "client": [
     "KeyMappingMixin",
+    "KeyMappingLookupMixin",
     "KeyboardHandlerMixin",
-    "MouseHandlerMixin",
-    "OptionsMixin"
+    "MouseHandlerInvoker",
+    "MouseHandlerMixin"
   ],
   "server": [
   ],

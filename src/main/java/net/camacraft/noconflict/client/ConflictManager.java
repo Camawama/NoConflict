@@ -34,13 +34,19 @@ public class ConflictManager {
     // Maps physical key to the mapping selected for HOLD behavior
     private static final Map<InputConstants.Key, KeyMapping> holdSelections = new HashMap<>();
 
-    private static final Map<KeyMapping, InputConstants.Key> originalKeys = new HashMap<>();
+    // Every mapping's binding (key and modifier) when the conflicts were last scanned: a change
+    // anywhere (the controls screen, another mod rebinding at runtime) means a rescan.
+    private static final Map<KeyMapping, Binding> scannedBindings = new HashMap<>();
 
-    // Are we currently showing the true keybinds (e.g. inside the controls screen)?
+    /** A mapping's binding: its key and its key modifier. */
+    private record Binding(InputConstants.Key key, KeyModifier modifier) {
+        boolean isOf(KeyMapping mapping) {
+            return key.equals(mapping.getKey()) && modifier == mapping.getKeyModifier();
+        }
+    }
+
+    // Is the controls screen open (every mapping answers for itself there)?
     private static boolean suspended = false;
-
-    // Are we currently in the middle of saving options.txt?
-    private static boolean saving = false;
 
     // Has the initial load config been applied yet?
     private static boolean defaultSelectionsApplied = false;
@@ -48,14 +54,11 @@ public class ConflictManager {
     public static void initialize() {
         Minecraft mc = Minecraft.getInstance();
 
-        // Don't re-initialize if we are just saving or suspended
-        if (saving || suspended) return;
+        if (suspended) return;
 
         conflicts.clear();
         suppressedConflicts.clear();
-        // We DO NOT clear originalKeys here. This makes initialize() safe to call multiple times,
-        // even if the keys are currently set to UNKNOWN from a previous initialization pass.
-        // (resume() clears it explicitly, because that's the one moment the real keys are on screen.)
+        scannedBindings.clear();
 
         List<? extends String> abandonedKeys = Config.ABANDONED_KEYS.get();
         List<? extends String> ignoredCategories = Config.IGNORED_CATEGORIES.get();
@@ -64,15 +67,9 @@ public class ConflictManager {
         Map<InputConstants.Key, List<KeyMapping>> allMappingsOnKey = new HashMap<>();
 
         for (KeyMapping mapping : mc.options.keyMappings) {
+            // No Conflict never unbinds a mapping (see KeyRouting): its key is always the real one
             InputConstants.Key key = mapping.getKey();
-
-            // Capture the true physical key if it's currently bound
-            if (key != InputConstants.UNKNOWN) {
-                originalKeys.put(mapping, key);
-            } else {
-                // If it's UNKNOWN, fallback to the physical key we recorded previously (if any)
-                key = originalKeys.get(mapping);
-            }
+            scannedBindings.put(mapping, bindingOf(mapping));
 
             if (key != null && key != InputConstants.UNKNOWN) {
                 if (abandonedKeys.contains(key.getName())) {
@@ -116,11 +113,8 @@ public class ConflictManager {
                 if (isSuppressedByIgnored) {
                     if (keepIgnoredConflictsBound) {
                         // Overlapping an ignored keybind is treated as intentional (e.g. Grappling
-                        // Hook's climb on Sneak): leave the mapping natively bound so both actions
+                        // Hook's climb on Sneak): leave the mapping alone so both actions
                         // trigger, exactly as they would without No Conflict installed.
-                        if (mapping.getKey() == InputConstants.UNKNOWN) {
-                            mapping.setKey(key);
-                        }
                         nativeOverlaps.computeIfAbsent(key, k -> new ArrayList<>()).add(mapping);
                     } else {
                         suppressedConflicts.computeIfAbsent(key, k -> new ArrayList<>()).add(mapping);
@@ -143,13 +137,18 @@ public class ConflictManager {
         validateSelections(selections);
         validateSelections(holdSelections);
 
+        KeyRouting.setManaged(conflicts, suppressedConflicts);
         applyResolutions();
+    }
+
+    private static Binding bindingOf(KeyMapping mapping) {
+        return new Binding(mapping.getKey(), mapping.getKeyModifier());
     }
 
     private static void warnAboutSuppressedConflicts() {
         for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : suppressedConflicts.entrySet()) {
             String names = entry.getValue().stream().map(KeyMapping::getName).collect(Collectors.joining(", "));
-            LOGGER.warn("NoConflict: unbound [{}] on '{}' because they conflict with an ignored keybind. "
+            LOGGER.warn("NoConflict: silenced [{}] on '{}' (nothing reaches them) because they conflict with an ignored keybind. "
                             + "Add them to ignoredKeybinds (or remove the ignored entry) in noconflict-client.toml to change this.",
                     names, entry.getKey().getName());
         }
@@ -248,15 +247,12 @@ public class ConflictManager {
         return conflicts.containsKey(key);
     }
 
-    /** True if this mapping is under No Conflict's control (its KeyMapping key is forced UNKNOWN). */
+    /**
+     * True if this mapping is under No Conflict's control: presses of its key reach it only through a tap or hold
+     * selection or the radial menu (or never, for a mapping silenced under UNBIND). Its key stays bound.
+     */
     public static boolean isManagedMapping(KeyMapping mapping) {
-        for (List<KeyMapping> list : conflicts.values()) {
-            if (list.contains(mapping)) return true;
-        }
-        for (List<KeyMapping> list : suppressedConflicts.values()) {
-            if (list.contains(mapping)) return true;
-        }
-        return false;
+        return KeyRouting.isManaged(mapping);
     }
 
     /**
@@ -271,9 +267,10 @@ public class ConflictManager {
         return mappings != null && mappings.contains(mapping);
     }
 
-    /** The real physical key the user bound this mapping to, or null if never seen bound. */
+    /** The physical key this mapping is bound to, or null if it is unbound (No Conflict never unbinds one). */
     public static InputConstants.Key getOriginalKey(KeyMapping mapping) {
-        return originalKeys.get(mapping);
+        InputConstants.Key key = mapping.getKey();
+        return key == InputConstants.UNKNOWN ? null : key;
     }
 
     public static List<KeyMapping> getConflictingMappings(InputConstants.Key key) {
@@ -349,146 +346,53 @@ public class ConflictManager {
         return names;
     }
 
+    /** The controls screen opened: every mapping answers for itself while the player sees and edits the true bindings. */
     public static void suspend() {
         if (suspended) return;
         suspended = true;
-        // Restore real keys. This makes them visible and editable in the options menu.
-        for (Map.Entry<KeyMapping, InputConstants.Key> entry : originalKeys.entrySet()) {
-            entry.getKey().setKey(entry.getValue());
-        }
-        KeyMapping.resetMapping();
+        KeyRouting.setBypassed(true);
     }
 
+    /** The controls screen closed: rescan, the player may have changed bindings there. */
     public static void resume() {
         if (!suspended) return;
         suspended = false;
-
-        // The controls screen just closed, so every mapping currently shows its true key.
-        // Re-snapshot from scratch: without this, unbinding a conflicted key in the controls
-        // screen would be undone by the stale originalKeys entry.
-        originalKeys.clear();
-
-        // Re-read whatever the user actually changed in the keybinds menu
+        KeyRouting.setBypassed(false);
         initialize();
     }
 
-    public static void onSaveStart() {
-        if (saving) return;
-        saving = true;
-        // We temporarily put the real keys back so options.txt saves properly
-        // Note: Options.save() is called frequently by the KeyBindsScreen when keys are changed!
-        if (!suspended) {
-            for (Map.Entry<KeyMapping, InputConstants.Key> entry : originalKeys.entrySet()) {
-                entry.getKey().setKey(entry.getValue());
-            }
-            KeyMapping.resetMapping();
-        }
-    }
-
-    public static void onSaveEnd() {
-        if (!saving) return;
-        saving = false;
-        // Put the UNKNOWN back if we aren't actively suspended (e.g. in the controls screen)
-        applyResolutions();
-    }
-
+    /**
+     * Which keys let every mapping on them through: those with no selection when the config says
+     * TRIGGER_ALL (vanilla behaviour until something is selected). Every other managed key reaches
+     * only what is routed to it.
+     */
     private static void applyResolutions() {
-        if (suspended || saving) return;
-
-        for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : conflicts.entrySet()) {
-            InputConstants.Key key = entry.getKey();
-            KeyMapping selection = selections.get(key);
-            KeyMapping holdSelection = holdSelections.get(key);
-
-            // If nothing is selected for this key and the config dictates TRIGGER_ALL,
-            // rebind them to their true physical keys so vanilla handles them natively.
-            if (selection == null && holdSelection == null && Config.DEFAULT_TAP_BEHAVIOR.get() == Config.DefaultTapBehavior.TRIGGER_ALL) {
-                for (KeyMapping mapping : entry.getValue()) {
-                    mapping.setKey(key);
-                }
-            } else {
-                for (KeyMapping mapping : entry.getValue()) {
-                    mapping.setKey(InputConstants.UNKNOWN);
-                }
+        Set<InputConstants.Key> passAll = new HashSet<>();
+        if (Config.DEFAULT_TAP_BEHAVIOR.get() == Config.DefaultTapBehavior.TRIGGER_ALL) {
+            for (InputConstants.Key key : conflicts.keySet()) {
+                if (selections.get(key) == null && holdSelections.get(key) == null) passAll.add(key);
             }
         }
-
-        for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : suppressedConflicts.entrySet()) {
-            for (KeyMapping mapping : entry.getValue()) {
-                mapping.setKey(InputConstants.UNKNOWN);
-            }
-        }
-
-        // We MUST rebuild the static KeyMapping MAP so vanilla's key processor stops routing
-        // physical key presses to these conflicted keybinds!
-        KeyMapping.resetMapping();
+        KeyRouting.setPassAll(passAll);
     }
 
-    public static void enforceResolutions() {
-        if (suspended || saving) return;
-        boolean needsReset = false;
-        boolean needsReinit = false;
-
-        for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : conflicts.entrySet()) {
-            InputConstants.Key key = entry.getKey();
-
-            // Skip keys KeyHandler is temporarily binding for a native GUI action, an active hold,
-            // or a synthetic tap that is being held down until the end of the current tick
-            if (KeyHandler.isPressedInGui(key) || KeyHandler.isHoldActive(key) || KeyHandler.isSyntheticTapActive(key)) {
-                continue;
-            }
-
-            KeyMapping selection = selections.get(key);
-            KeyMapping holdSelection = holdSelections.get(key);
-
-            InputConstants.Key expected =
-                    (selection == null && holdSelection == null && Config.DEFAULT_TAP_BEHAVIOR.get() == Config.DefaultTapBehavior.TRIGGER_ALL)
-                            ? key : InputConstants.UNKNOWN;
-
-            for (KeyMapping mapping : entry.getValue()) {
-                InputConstants.Key current = mapping.getKey();
-                if (current.equals(expected)) continue;
-
-                if (isExternalRebind(mapping, current)) {
-                    // Another mod rebound this mapping at runtime; adopt the new binding instead of stomping it
-                    originalKeys.put(mapping, current);
-                    needsReinit = true;
-                } else {
-                    mapping.setKey(expected);
-                    needsReset = true;
+    /**
+     * Once a tick: rescans the conflicts when any mapping's binding changed since the last scan (another mod's
+     * controls screen, a mod rebinding at runtime, a mapping registered late).
+     */
+    public static void checkForRebinds() {
+        if (suspended) return;
+        KeyMapping[] mappings = Minecraft.getInstance().options.keyMappings;
+        boolean changed = mappings.length != scannedBindings.size();
+        if (!changed) {
+            for (KeyMapping mapping : mappings) {
+                Binding scanned = scannedBindings.get(mapping);
+                if (scanned == null || !scanned.isOf(mapping)) {
+                    changed = true;
+                    break;
                 }
             }
         }
-
-        for (Map.Entry<InputConstants.Key, List<KeyMapping>> entry : suppressedConflicts.entrySet()) {
-            for (KeyMapping mapping : entry.getValue()) {
-                InputConstants.Key current = mapping.getKey();
-                if (current == InputConstants.UNKNOWN) continue;
-
-                if (isExternalRebind(mapping, current)) {
-                    originalKeys.put(mapping, current);
-                    needsReinit = true;
-                } else {
-                    mapping.setKey(InputConstants.UNKNOWN);
-                    needsReset = true;
-                }
-            }
-        }
-
-        if (needsReinit) {
-            // Re-scan conflicts with the adopted bindings (also reapplies resolutions + resetMapping)
-            initialize();
-            return;
-        }
-
-        if (needsReset) {
-            KeyMapping.resetMapping();
-        }
-    }
-
-    private static boolean isExternalRebind(KeyMapping mapping, InputConstants.Key current) {
-        if (current == InputConstants.UNKNOWN) return false;
-        InputConstants.Key original = originalKeys.get(mapping);
-        return original != null && !current.equals(original);
+        if (changed) initialize();
     }
 }

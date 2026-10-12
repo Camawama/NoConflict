@@ -16,9 +16,10 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import javax.annotation.Nullable;
 
 /**
- * Tells Camafy which physical key really drives a mapping No Conflict has unbound, and how
- * (tap, hold or radial menu). Mods that ask Camafy (e.g. Binders' keybind overlay, via
- * {@code Keys.displayText}) then show the right key without knowing about No Conflict.
+ * Tells Camafy how a mapping No Conflict manages is reached on its key (tap, hold or the radial
+ * menu). Mods that ask Camafy (e.g. Binders' keybind overlay, via {@code Keys.displayText}) then
+ * show "Hold X" or "X (menu)" without knowing about No Conflict. No Conflict never unbinds a
+ * mapping, so its own key is always the physical one.
  * {@link net.camacraft.noconflict.api.NoConflictApi} stays for mods that query No Conflict directly.
  */
 @Mod.EventBusSubscriber(modid = NoConflict.MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
@@ -34,21 +35,17 @@ public final class RoutingKeyResolver implements KeyResolver {
     @Override
     public KeyRoute resolve(KeyMapping mapping) {
         InputConstants.Key key = ConflictManager.getOriginalKey(mapping);
-        // Only mappings a tap, hold or the radial menu actually reaches. Not one the user unbound
-        // (dropped from management when the controls screen closes), nor one UNBIND suppressed for
-        // sharing a key with an ignored keybind: nothing routes to those, so they read "Not Bound".
+        // Only mappings a tap, hold or the radial menu actually reaches; not one silenced under UNBIND for
+        // sharing a key with an ignored keybind (nothing reaches it), nor while the controls screen is open.
         if (key == null || !ConflictManager.isRoutedOn(key, mapping)) return null;
         if (mapping == ConflictManager.getSelection(key)) return KeyRoute.tap(key);
         if (mapping == ConflictManager.getHoldSelection(key)) return KeyRoute.hold(key);
         return KeyRoute.menu(key);
     }
 
-    /** A synthetic tap stays down until the end of the next tick, after the physical key is up. */
+    /** A delivered tap stays down until the end of the tick, after the physical key is up. */
     @Override
     public boolean holdsDown(KeyMapping mapping) {
-        InputConstants.Key key = mapping.getKey();
-        return !key.equals(InputConstants.UNKNOWN)
-                && KeyHandler.isSyntheticTapActive(key)
-                && ConflictManager.isManagedMapping(mapping);
+        return KeyHandler.isSyntheticTapOf(mapping);
     }
 }
